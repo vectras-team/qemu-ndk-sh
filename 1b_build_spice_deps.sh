@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SPICE_CRASH_PATCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spice_server_crash_fixes.patch"
 
 # ==================================================
 # Build SPICE dependencies for Android
@@ -237,7 +238,10 @@ else
 fi
 
 ### ========= 5) spice-server =========
-if [ -f "$PREFIX/lib/libspice-server.so" ]; then
+SPICE_FIX_DIGEST="$(sha256sum "$SPICE_CRASH_PATCH" | cut -d' ' -f1)"
+SPICE_FIX_STAMP="$PREFIX/lib/.spice-server-crash-fixes.sha256"
+if [ -f "$PREFIX/lib/libspice-server.so" ] &&
+   [ -f "$SPICE_FIX_STAMP" ] && [ "$(cat "$SPICE_FIX_STAMP")" = "$SPICE_FIX_DIGEST" ]; then
   echo "==> spice-server already installed, skipping."
 else
   SPICE_SERVER_SRC="$SRC_DIR/spice-${SPICE_SERVER_VER}"
@@ -246,6 +250,14 @@ else
     git clone --depth 1 --branch "v${SPICE_SERVER_VER}" --recurse-submodules \
       https://gitlab.freedesktop.org/spice/spice.git \
       "$SPICE_SERVER_SRC"
+  fi
+
+  # Android-specific patches to spice-server meson.build. Idempotent via marker.
+  if git -C "$SPICE_SERVER_SRC" apply --check "$SPICE_CRASH_PATCH"; then
+    git -C "$SPICE_SERVER_SRC" apply "$SPICE_CRASH_PATCH"
+  elif ! git -C "$SPICE_SERVER_SRC" apply --check --reverse "$SPICE_CRASH_PATCH"; then
+    echo "ERROR: SPICE crash fixes do not match the selected sources." >&2
+    exit 1
   fi
 
   # Android-specific patches to spice-server meson.build. Idempotent via marker.
@@ -318,6 +330,7 @@ PYEOF
   echo "==> Building spice-server"
   meson compile -j"$JOBS"
   meson install
+  printf '%s\n' "$SPICE_FIX_DIGEST" > "$SPICE_FIX_STAMP"
 fi
 
 ### ========= DONE =========

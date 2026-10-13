@@ -218,17 +218,12 @@ else
   [ -d "phodav-${PHODAV_VER}" ] || tar xf "phodav-${PHODAV_VER}.tar.xz"
   rm -rf "$BUILD_DIR/phodav"; mkdir -p "$BUILD_DIR/phodav"; cd "$BUILD_DIR/phodav"
   echo "==> Configuring phodav ${PHODAV_VER}"
-  # We only need the library; skip the spice-webdavd daemon (guest-side) and
-  # the gtk-doc/tests. udev/avahi are Linux desktop bits we don't have.
+  # phodav 3.0 exposes gtk_doc and avahi, not the older introspection,
+  # systemd, udev, spice or tests switches. Disable optional desktop deps.
   meson setup . "$SRC_DIR/phodav-${PHODAV_VER}" \
     --cross-file "$MESON_CROSS" --prefix "$PREFIX" \
     -Ddefault_library=shared \
-    -Dgtk_doc=disabled -Dintrospection=disabled \
-    -Dsystemd=disabled -Dudev=disabled -Davahi=disabled \
-    -Dspice=disabled -Dtests=disabled || \
-  meson setup . "$SRC_DIR/phodav-${PHODAV_VER}" \
-    --cross-file "$MESON_CROSS" --prefix "$PREFIX" \
-    -Ddefault_library=shared
+    -Dauto_features=disabled -Dgtk_doc=disabled -Davahi=disabled
   meson compile -j"$JOBS"
   meson install
 fi

@@ -15,9 +15,19 @@ NDK_PATH="${NDK_PATH:-$HOME/android-ndk-r29}"
 
 API_LEVEL="${API_LEVEL:-31}"
 QEMU_VERSION="${QEMU_VERSION:-10.0.2}"
-QEMU_GIT_URL="${QEMU_GIT_URL:-https://github.com/wasdwasd0105/qemu-android.git}"
+QEMU_GIT_URL="${QEMU_GIT_URL:-https://github.com/vectras-team/qemu-android.git}"
 QEMU_GIT_REF="qemu-10.0.2"
 APP_ABI="${APP_ABI:-arm64-v8a}"
+QEMU_ARCHES="${QEMU_ARCHES:-aarch64 i386 x86_64 ppc}"
+read -r -a SYSTEM_ARCHES <<< "$QEMU_ARCHES"
+SYSTEM_TARGETS=()
+BUILD_TARGETS=()
+for arch in "${SYSTEM_ARCHES[@]}"; do
+  SYSTEM_TARGETS+=("${arch}-softmmu")
+  BUILD_TARGETS+=("qemu-system-${arch}")
+done
+printf -v QEMU_TARGET_LIST '%s,' "${SYSTEM_TARGETS[@]}"
+QEMU_TARGET_LIST="${QEMU_TARGET_LIST%,}"
 BUILD_ROOT="${BUILD_ROOT:-$(pwd)/build}"
 QEMU_SRC="${QEMU_SRC:-$BUILD_ROOT/qemu-${QEMU_VERSION}}"
 BUILD_DIR="${BUILD_DIR:-$BUILD_ROOT/qemu-build-${APP_ABI}}"
@@ -91,6 +101,15 @@ else
   #   echo "==> Using existing QEMU source directory (not a git repo): $QEMU_SRC"
   # fi
   echo "==> Using existing QEMU source directory (not a git repo): $QEMU_SRC"
+fi
+
+# --- Pre-fetch the slirp meson subproject so we can patch it before compile ---
+QMP_CRASH_PATCH="$(cd "$(dirname "$0")" && pwd)/qemu_qmp_shutdown_crash.patch"
+if git -C "$QEMU_SRC" apply --check "$QMP_CRASH_PATCH"; then
+  git -C "$QEMU_SRC" apply "$QMP_CRASH_PATCH"
+elif ! git -C "$QEMU_SRC" apply --check --reverse "$QMP_CRASH_PATCH"; then
+  echo "ERROR: QMP shutdown crash fixes do not match the selected sources." >&2
+  exit 1
 fi
 
 # --- Pre-fetch the slirp meson subproject so we can patch it before compile ---
@@ -347,7 +366,7 @@ cd "$BUILD_DIR"
   -Dvnc_sasl=disabled \
   -Dspice=enabled \
   $PIXMAN_OPT \
-  --target-list="aarch64-softmmu,i386-softmmu,x86_64-softmmu,ppc-softmmu"
+  --target-list="$QEMU_TARGET_LIST"
 
 # Use the same Meson that created build.dat (QEMU 10.x bootstraps a venv here)
 MESON="$BUILD_DIR/pyvenv/bin/meson"
@@ -358,10 +377,7 @@ fi
 
 # --- Build executables (PIE) with the same Meson ---
 "$MESON" compile -C "$BUILD_DIR" \
-  qemu-system-aarch64 \
-  qemu-system-i386 \
-  qemu-system-x86_64 \
-  qemu-system-ppc \
+  "${BUILD_TARGETS[@]}" \
   qemu-img \
   -j "$JOBS"
 
@@ -376,7 +392,7 @@ safe_strip_debug() {
   "$STRIP" --strip-debug "$1" || true
 }
 
-for t in aarch64 i386 x86_64 ppc; do
+for t in "${SYSTEM_ARCHES[@]}"; do
   so="$PREFIX/lib/libqemu-system-${t}.so"
   bin="$PREFIX/bin/qemu-system-${t}"
   if [ -f "$bin" ]; then

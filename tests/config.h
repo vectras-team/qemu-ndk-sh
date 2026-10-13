@@ -1,0 +1,1 @@
+#define ENABLE_EXTRA_CHECKS 1

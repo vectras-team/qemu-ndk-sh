@@ -43,11 +43,12 @@ mkdir -p "$BIN_OUT" "$LIB_OUT"
 command -v patchelf >/dev/null 2>&1 || { echo "patchelf is required" >&2; exit 1; }
 
 need() { [ -f "$1" ] || { echo "Missing: $1" >&2; exit 1; }; }
-retag_soname() { [ -f "$1" ] && patchelf --set-soname "$(basename "$1")" "$1"; }
-rn() { patchelf --replace-needed "$1" "$2" "$3" 2>/dev/null || true; }
+# Keep newly allocated ELF segments compatible with Android's 16 KiB pages.
+retag_soname() { [ -f "$1" ] && patchelf --page-size 16384 --set-soname "$(basename "$1")" "$1"; }
+rn() { patchelf --page-size 16384 --replace-needed "$1" "$2" "$3" 2>/dev/null || true; }
 copy_lib() { local src="$1" dst="$2"; need "$src"; cp -Lf "$src" "$dst"; }
 
-QEMU_ARCHES="aarch64 i386 x86_64 ppc"
+QEMU_ARCHES="${QEMU_ARCHES:-aarch64 i386 x86_64 ppc}"
 QEMU_TOOLS="qemu-img"
 
 # 1) Copy GLib stack + slirp (+ pixman if present) into libs with unversioned names
@@ -317,6 +318,22 @@ for tool in $QEMU_TOOLS; do
   rn libglib-2.0.so.0    libglib-2.0.so    "$exe"
   rn libgmodule-2.0.so.0 libgmodule-2.0.so "$exe"
   rn libintl.so.8        libintl.so        "$exe"
+done
+
+# Cover every shipped library, including helpers such as gthread. A new
+# dependency may otherwise retain its versioned SONAME despite the targeted
+# rewrites above and fail to load from Android's unversioned APK lib names.
+for so in "$LIB_OUT"/*.so; do
+  while IFS= read -r dependency; do
+    case "$dependency" in
+      *.so.[0-9]*)
+        unversioned="${dependency%%.so.*}.so"
+        if [ -f "$LIB_OUT/$unversioned" ]; then
+          patchelf --page-size 16384 --replace-needed "$dependency" "$unversioned" "$so"
+        fi
+        ;;
+    esac
+  done < <("$READELF" -d "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p')
 done
 
 # 6) Show final SONAME/NEEDED for quick verification

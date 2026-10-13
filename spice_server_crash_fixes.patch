@@ -1,0 +1,92 @@
+diff --git a/server/memslot.c b/server/memslot.c
+index 4d9d02b..9d4207d 100644
+--- a/server/memslot.c
++++ b/server/memslot.c
+@@ -52,9 +52,14 @@ int memslot_validate_virt(RedMemSlotInfo *info, uintptr_t virt, int slot_id,
+ {
+     MemSlot *slot;
+ 
++    if (group_id >= info->num_memslots_groups || slot_id < 0 ||
++        (uint32_t)slot_id >= info->num_memslots) {
++        spice_warning("invalid memory slot, slot_id=%d group_id=%d", slot_id, group_id);
++        return 0;
++    }
+     slot = &info->mem_slots[group_id][slot_id];
+     if ((virt + add_size) < virt) {
+-        spice_critical("virtual address overlap");
++        spice_warning("virtual address overlap");
+         return 0;
+     }
+ 
+@@ -97,15 +102,15 @@ void *memslot_get_virt(RedMemSlotInfo *info, QXLPHYSICAL addr, uint32_t add_size
+ 
+     MemSlot *slot;
+ 
+-    if (group_id >= info->num_memslots_groups) {
+-        spice_critical("group_id too big");
++    if (group_id < 0 || (uint32_t)group_id >= info->num_memslots_groups) {
++        spice_warning("invalid memory slot group_id=%d", group_id);
+         return NULL;
+     }
+ 
+     slot_id = memslot_get_id(info, addr);
+     if (slot_id >= info->num_memslots) {
+         print_memslots(info);
+-        spice_critical("slot_id %d too big, addr=%" G_GINT64_MODIFIER "x", slot_id, addr);
++        spice_warning("slot_id %d too big, addr=%" G_GINT64_MODIFIER "x", slot_id, addr);
+         return NULL;
+     }
+ 
+@@ -114,7 +119,7 @@ void *memslot_get_virt(RedMemSlotInfo *info, QXLPHYSICAL addr, uint32_t add_size
+     generation = memslot_get_generation(info, addr);
+     if (generation != slot->generation) {
+         print_memslots(info);
+-        spice_critical("address generation is not valid, group_id %d, slot_id %d, "
++        spice_warning("address generation is not valid, group_id %d, slot_id %d, "
+                        "gen %d, slot_gen %d",
+                        group_id, slot_id,
+                        generation, slot->generation);
+diff --git a/server/spicevmc.cpp b/server/spicevmc.cpp
+index 3dbc3ea..0be3a6f 100644
+--- a/server/spicevmc.cpp
++++ b/server/spicevmc.cpp
+@@ -601,15 +601,25 @@ void RedVmcChannel::on_connect(RedClient *client, RedStream *stream, int migrati
+ 
+     if (strcmp(sin->subtype, "port") == 0) {
+         spicevmc_port_send_init(rcc);
++        // Sending PORT_INIT may synchronously disconnect the client and
++        // clear rcc. Do not dereference it or attach a disconnected client.
++        if (!rcc) {
++            return;
++        }
+     }
+ 
+     if (!vmc_channel->chardev->client_add(reinterpret_cast<RedCharDeviceClientOpaque *>(client),
+                                           FALSE, 0, ~0, ~0, rcc->is_waiting_for_migrate_data())) {
+         spice_warning("failed to add client to spicevmc");
+-        rcc->disconnect();
++        if (rcc) {
++            rcc->disconnect();
++        }
+         return;
+     }
+ 
++    if (!rcc) {
++        return;
++    }
+     sif = spice_char_device_get_interface(sin);
+     if (sif->state) {
+         sif->state(sin, 1);
+diff --git a/server/tests/test-qxl-parsing.cpp b/server/tests/test-qxl-parsing.cpp
+index d68879f..77197df 100644
+--- a/server/tests/test-qxl-parsing.cpp
++++ b/server/tests/test-qxl-parsing.cpp
+@@ -102,7 +102,7 @@ static void test_memslot_invalid_slot_id(void)
+ static void test_memslot_invalid_addresses(void)
+ {
+     g_test_trap_subprocess("/server/memslot-invalid-addresses/subprocess/group_id", 0, (GTestSubprocessFlags) 0);
+-    g_test_trap_assert_stderr("*group_id too big*");
++    g_test_trap_assert_stderr("*invalid memory slot group_id=1*");
+ 
+     g_test_trap_subprocess("/server/memslot-invalid-addresses/subprocess/slot_id", 0, (GTestSubprocessFlags) 0);
+     g_test_trap_assert_stderr("*slot_id 1 too big*");
